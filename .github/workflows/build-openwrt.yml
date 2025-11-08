@@ -61,86 +61,41 @@ jobs:
       run: |
         git clone --depth=1 --branch ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} openwrt
 
-    - name: Check OpenWrt structure
+    - name: Fix feeds structure
       working-directory: ./openwrt
       run: |
-        echo "Checking OpenWrt directory structure..."
-        ls -la
-        echo "Feeds script exists:"
-        ls -la scripts/feeds || echo "Feeds script not found"
+        # 创建必要的 feeds 目录结构
+        mkdir -p feeds
+        # 创建一个空的 base 目录来满足构建系统的要求
+        mkdir -p feeds/base
+        touch feeds/base/.gitkeep
+        echo "Fixed feeds structure"
 
-    - name: Initialize feeds with manual method
+    - name: Configure minimal feeds
       working-directory: ./openwrt
       run: |
-        # 手动创建 feeds.conf 并初始化
-        cat > feeds.conf << 'EOF'
+        # 使用基础的 feeds 配置
+        cat > ${{ env.FEEDS_CONF }} << 'EOF'
         src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
         src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
         src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         EOF
-        
-        # 检查并创建 feeds 目录结构
-        mkdir -p feeds
-        echo "Feeds directory created"
 
-    - name: Update core feeds manually
+    - name: Update and install core feeds
       working-directory: ./openwrt
       run: |
-        # 逐个更新核心 feeds
-        echo "Updating packages feed..."
-        if [ ! -d "feeds/packages" ]; then
-          git clone --depth=1 https://github.com/openwrt/packages.git feeds/packages -b openwrt-23.05
-        fi
-        
-        echo "Updating luci feed..."
-        if [ ! -d "feeds/luci" ]; then
-          git clone --depth=1 https://github.com/openwrt/luci.git feeds/luci -b openwrt-23.05
-        fi
-        
-        echo "Updating routing feed..."
-        if [ ! -d "feeds/routing" ]; then
-          git clone --depth=1 https://github.com/openwrt/routing.git feeds/routing -b openwrt-23.05
-        fi
-        
-        echo "Updating telephony feed..."
-        if [ ! -d "feeds/telephony" ]; then
-          git clone --depth=1 https://github.com/openwrt/telephony.git feeds/telephony -b openwrt-23.05
-        fi
-        
-        echo "Core feeds updated manually"
-
-    - name: Install core packages
-      working-directory: ./openwrt
-      run: |
-        # 使用 feeds 脚本安装基础包
+        # 更新并安装核心 feeds
+        ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Add third-party feeds manually
+    - name: Add third-party feeds directly
       working-directory: ./openwrt
       run: |
-        # 手动添加第三方 feeds
-        echo "Adding third-party feeds manually..."
+        # 直接克隆第三方 feeds 到 feeds 目录
+        cd feeds
         
-        # 更新 feeds.conf 包含第三方源
-        cat >> feeds.conf << 'EOF'
-
-        # Third-party feeds
-        src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
-        src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
-        src-git openclash https://github.com/vernesong/OpenClash.git;master
-        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;main
-        src-git smartdns https://github.com/pymumu/smartdns.git;master
-        src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;1.10.6
-        src-git ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git;main
-        src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;main
-        src-git netdata https://github.com/sirpdboy/luci-app-netdata.git;main
-        src-git turboacc https://github.com/chenmozhijin/turboacc.git;main
-        src-git autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git;main
-        src-git control https://github.com/sirpdboy/luci-app-control.git;main
-        EOF
-
-        # 逐个更新第三方 feeds
+        # 第三方 feeds 列表
         third_party_feeds=(
           "passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git main"
           "passwall https://github.com/xiaorouji/openwrt-passwall.git main"
@@ -161,52 +116,52 @@ jobs:
           feed_url=$(echo $feed_info | cut -d' ' -f2)
           feed_branch=$(echo $feed_info | cut -d' ' -f3)
           
-          echo "Adding feed: $feed_name"
-          if [ ! -d "feeds/$feed_name" ]; then
-            git clone --depth=1 "$feed_url" "feeds/$feed_name" -b "$feed_branch" || echo "Failed to clone $feed_name, but continuing..."
+          echo "Cloning $feed_name from $feed_url (branch: $feed_branch)"
+          if [ ! -d "$feed_name" ]; then
+            git clone --depth=1 "$feed_url" "$feed_name" -b "$feed_branch" || echo "Failed to clone $feed_name, but continuing..."
           else
-            echo "Feed $feed_name already exists"
+            echo "$feed_name already exists"
           fi
         done
+        
+        cd ..
 
-    - name: Update all feeds and install packages
+    - name: Update feeds configuration
       working-directory: ./openwrt
       run: |
-        # 使用 feeds 系统更新和安装所有包
-        ./scripts/feeds update -a || echo "Some feeds update failed, but continuing..."
+        # 更新 feeds.conf 包含所有 feeds
+        cat > ${{ env.FEEDS_CONF }} << 'EOF'
+        src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
+        src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
+        src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
+        src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+        src-link passwall_packages feeds/passwall_packages
+        src-link passwall feeds/passwall
+        src-link openclash feeds/openclash
+        src-link adguardhome feeds/adguardhome
+        src-link smartdns feeds/smartdns
+        src-link zerotier feeds/zerotier
+        src-link ddns_go feeds/ddns_go
+        src-link lucky feeds/lucky
+        src-link netdata feeds/netdata
+        src-link turboacc feeds/turboacc
+        src-link autoupdate feeds/autoupdate
+        src-link control feeds/control
+        EOF
+
+    - name: Install all packages
+      working-directory: ./openwrt
+      run: |
+        # 更新并安装所有包
+        ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Install specific packages
+    - name: Skip dependency check if requested
       working-directory: ./openwrt
+      if: ${{ inputs.skip_checks }}
       run: |
-        # 确保安装所有需要的包
-        packages=(
-          "luci-app-adguardhome"
-          "luci-app-attendedsysupgrade"
-          "luci-app-autoupdate"
-          "luci-app-control-webrestriction"
-          "luci-app-control-weburl"
-          "luci-app-ddns-go"
-          "luci-app-firewall"
-          "luci-app-lucky"
-          "luci-app-netdata"
-          "luci-app-openclash"
-          "luci-app-package-manager"
-          "luci-app-passwall"
-          "luci-app-smartdns"
-          "luci-app-ttyd"
-          "luci-app-turboacc"
-          "luci-app-upnp"
-          "luci-app-vsftpd"
-          "luci-app-wol"
-          "luci-app-zerotier"
-          "luci-theme-argon"
-        )
-        
-        for pkg in "${packages[@]}"; do
-          echo "Installing $pkg..."
-          ./scripts/feeds install $pkg || echo "Failed to install $pkg, but continuing..."
-        done
+        echo "Skipping dependency checks as requested"
+        make defconfig
 
     - name: Check dependencies
       working-directory: ./openwrt
@@ -218,19 +173,21 @@ jobs:
         make toolchain/install -j$(nproc)
         echo "Dependency check completed"
 
-    - name: Configure OpenWrt
+    - name: Configure OpenWrt using menuconfig method
       working-directory: ./openwrt
       run: |
-        # 应用默认配置
+        # 使用脚本自动配置，避免手动编辑 .config
+        cat > config.sh << 'EOF'
+        #!/bin/bash
         make defconfig
         
-        # 配置目标系统
-        echo "CONFIG_TARGET_x86=y" >> .config
+        # 设置目标架构
+        sed -i 's/# CONFIG_TARGET_x86 is not set/CONFIG_TARGET_x86=y/' .config
         echo "CONFIG_TARGET_x86_64=y" >> .config
         echo "CONFIG_TARGET_x86_generic=y" >> .config
         echo "CONFIG_TARGET_x86_generic_Generic=y" >> .config
         
-        # 启用大容量存储
+        # 设置分区大小
         echo "CONFIG_TARGET_ROOTFS_PARTSIZE=2048" >> .config
         echo "CONFIG_TARGET_KERNEL_PARTSIZE=256" >> .config
         
@@ -242,57 +199,50 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         
-        # 选择所有需要的包
-        packages=(
-          "luci-app-adguardhome"
-          "luci-app-attendedsysupgrade" 
-          "luci-app-autoupdate"
-          "luci-app-control-webrestriction"
-          "luci-app-control-weburl"
-          "luci-app-ddns-go"
-          "luci-app-firewall"
-          "luci-app-lucky"
-          "luci-app-netdata"
-          "luci-app-openclash"
-          "luci-app-package-manager"
-          "luci-app-passwall"
-          "luci-app-smartdns"
-          "luci-app-ttyd"
-          "luci-app-turboacc"
-          "luci-app-upnp"
-          "luci-app-vsftpd"
-          "luci-app-wol"
-          "luci-app-zerotier"
-          "luci-theme-argon"
-          "luci"
-          "luci-compat"
-          "luci-ssl"
-          "luci-proto-ipv6"
-          "luci-proto-ppp"
-          "ipv6helper"
-          "ddns-scripts"
-          "ddns-scripts-cloudflare"
-          "automount"
-          "block-mount"
-          "openssh-sftp-server"
-          "htop"
-          "nano"
-          "curl"
-          "wget"
-        )
+        # 启用 Luci
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
+        echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
         
-        for pkg in "${packages[@]}"; do
-          echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-        done
+        # 启用主题
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        
+        # 启用核心应用
+        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y" >> .config
+        
+        # 启用第三方应用
+        echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-autoupdate=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-control-webrestriction=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-control-weburl=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ddns-go=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-netdata=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
         
         # 更新配置
         make defconfig
+        EOF
+        
+        chmod +x config.sh
+        ./config.sh
 
     - name: Build OpenWrt
       working-directory: ./openwrt
       continue-on-error: false
       run: |
-        # 开始编译，启用详细输出
+        # 开始编译
         echo "Starting build process..."
         set -o pipefail
         make -j$(nproc) V=s 2>&1 | tee build.log || (echo "Build failed, creating error log..." && tail -n 500 build.log > build_error.log && exit 1)
