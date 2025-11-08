@@ -61,75 +61,119 @@ jobs:
       run: |
         git clone --depth=1 --branch ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} openwrt
 
-    - name: Configure minimal feeds
+    - name: Check OpenWrt structure
       working-directory: ./openwrt
       run: |
-        # 先使用最基础的 feeds 配置
-        cat > ${{ env.FEEDS_CONF }} << 'EOF'
-        src-git packages https://git.openwrt.org/feed/packages.git;openwrt-23.05
-        src-git luci https://git.openwrt.org/project/luci.git;openwrt-23.05
-        src-git routing https://git.openwrt.org/feed/routing.git;openwrt-23.05
-        src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-23.05
+        echo "Checking OpenWrt directory structure..."
+        ls -la
+        echo "Feeds script exists:"
+        ls -la scripts/feeds || echo "Feeds script not found"
+
+    - name: Initialize feeds with manual method
+      working-directory: ./openwrt
+      run: |
+        # 手动创建 feeds.conf 并初始化
+        cat > feeds.conf << 'EOF'
+        src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
+        src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
+        src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
+        src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         EOF
+        
+        # 检查并创建 feeds 目录结构
+        mkdir -p feeds
+        echo "Feeds directory created"
 
-    - name: Update official feeds with retry
+    - name: Update core feeds manually
       working-directory: ./openwrt
       run: |
-        # 重试机制更新官方 feeds
-        for i in {1..3}; do
-          echo "Attempt $i to update feeds..."
-          if ./scripts/feeds update -a; then
-            echo "Feeds updated successfully"
-            break
-          else
-            echo "Feeds update failed, retrying in 10 seconds..."
-            sleep 10
-          fi
-          if [ $i -eq 3 ]; then
-            echo "Failed to update feeds after 3 attempts"
-            exit 1
-          fi
-        done
+        # 逐个更新核心 feeds
+        echo "Updating packages feed..."
+        if [ ! -d "feeds/packages" ]; then
+          git clone --depth=1 https://github.com/openwrt/packages.git feeds/packages -b openwrt-23.05
+        fi
+        
+        echo "Updating luci feed..."
+        if [ ! -d "feeds/luci" ]; then
+          git clone --depth=1 https://github.com/openwrt/luci.git feeds/luci -b openwrt-23.05
+        fi
+        
+        echo "Updating routing feed..."
+        if [ ! -d "feeds/routing" ]; then
+          git clone --depth=1 https://github.com/openwrt/routing.git feeds/routing -b openwrt-23.05
+        fi
+        
+        echo "Updating telephony feed..."
+        if [ ! -d "feeds/telephony" ]; then
+          git clone --depth=1 https://github.com/openwrt/telephony.git feeds/telephony -b openwrt-23.05
+        fi
+        
+        echo "Core feeds updated manually"
 
-    - name: Install base packages
+    - name: Install core packages
       working-directory: ./openwrt
       run: |
+        # 使用 feeds 脚本安装基础包
         ./scripts/feeds install -a
 
-    - name: Add third-party feeds gradually
+    - name: Add third-party feeds manually
       working-directory: ./openwrt
       run: |
-        # 逐个添加第三方 feeds，避免一次性添加太多导致问题
+        # 手动添加第三方 feeds
+        echo "Adding third-party feeds manually..."
+        
+        # 更新 feeds.conf 包含第三方源
+        cat >> feeds.conf << 'EOF'
+
+        # Third-party feeds
+        src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
+        src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
+        src-git openclash https://github.com/vernesong/OpenClash.git;master
+        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;main
+        src-git smartdns https://github.com/pymumu/smartdns.git;master
+        src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;1.10.6
+        src-git ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git;main
+        src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;main
+        src-git netdata https://github.com/sirpdboy/luci-app-netdata.git;main
+        src-git turboacc https://github.com/chenmozhijin/turboacc.git;main
+        src-git autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git;main
+        src-git control https://github.com/sirpdboy/luci-app-control.git;main
+        EOF
+
+        # 逐个更新第三方 feeds
         third_party_feeds=(
-          "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main"
-          "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main"
-          "src-git openclash https://github.com/vernesong/OpenClash.git;master"
-          "src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;main"
-          "src-git smartdns https://github.com/pymumu/smartdns.git;master"
-          "src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;1.10.6"
-          "src-git ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git;main"
-          "src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;main"
-          "src-git netdata https://github.com/sirpdboy/luci-app-netdata.git;main"
-          "src-git turboacc https://github.com/chenmozhijin/turboacc.git;main"
-          "src-git autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git;main"
-          "src-git control https://github.com/sirpdboy/luci-app-control.git;main"
+          "passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git main"
+          "passwall https://github.com/xiaorouji/openwrt-passwall.git main"
+          "openclash https://github.com/vernesong/OpenClash.git master"
+          "adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git main"
+          "smartdns https://github.com/pymumu/smartdns.git master"
+          "zerotier https://github.com/zerotier/openwrt-zerotier.git 1.10.6"
+          "ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git main"
+          "lucky https://github.com/sirpdboy/luci-app-lucky.git main"
+          "netdata https://github.com/sirpdboy/luci-app-netdata.git main"
+          "turboacc https://github.com/chenmozhijin/turboacc.git main"
+          "autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git main"
+          "control https://github.com/sirpdboy/luci-app-control.git main"
         )
         
-        for feed in "${third_party_feeds[@]}"; do
-          echo "Adding feed: $feed"
-          echo "$feed" >> ${{ env.FEEDS_CONF }}
-          if ./scripts/feeds update -a; then
-            echo "Successfully updated with new feed"
+        for feed_info in "${third_party_feeds[@]}"; do
+          feed_name=$(echo $feed_info | cut -d' ' -f1)
+          feed_url=$(echo $feed_info | cut -d' ' -f2)
+          feed_branch=$(echo $feed_info | cut -d' ' -f3)
+          
+          echo "Adding feed: $feed_name"
+          if [ ! -d "feeds/$feed_name" ]; then
+            git clone --depth=1 "$feed_url" "feeds/$feed_name" -b "$feed_branch" || echo "Failed to clone $feed_name, but continuing..."
           else
-            echo "Warning: Failed to update with new feed, but continuing..."
-            # 移除有问题的feed
-            sed -i "\|$feed|d" ${{ env.FEEDS_CONF }}
+            echo "Feed $feed_name already exists"
           fi
         done
 
-    - name: Install all packages
+    - name: Update all feeds and install packages
       working-directory: ./openwrt
       run: |
+        # 使用 feeds 系统更新和安装所有包
+        ./scripts/feeds update -a || echo "Some feeds update failed, but continuing..."
         ./scripts/feeds install -a
 
     - name: Install specific packages
@@ -161,11 +205,7 @@ jobs:
         
         for pkg in "${packages[@]}"; do
           echo "Installing $pkg..."
-          if ./scripts/feeds install $pkg; then
-            echo "Successfully installed $pkg"
-          else
-            echo "Warning: Failed to install $pkg"
-          fi
+          ./scripts/feeds install $pkg || echo "Failed to install $pkg, but continuing..."
         done
 
     - name: Check dependencies
