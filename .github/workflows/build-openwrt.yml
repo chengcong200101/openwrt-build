@@ -52,13 +52,13 @@ jobs:
 
     - name: Clone OpenWrt source
       run: |
-        git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
+        git clone --depth=1 --branch ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} openwrt
         cd openwrt
 
     - name: Configure feeds
       working-directory: ./openwrt
       run: |
-        cat > $FEEDS_CONF << EOF
+        cat > ${{ env.FEEDS_CONF }} << 'EOF'
         src-git packages https://git.openwrt.org/feed/packages.git;openwrt-23.05
         src-git luci https://git.openwrt.org/project/luci.git;openwrt-23.05
         src-git routing https://git.openwrt.org/feed/routing.git;openwrt-23.05
@@ -89,7 +89,6 @@ jobs:
       working-directory: ./openwrt
       run: |
         # 安装所有需要的包
-        ./scripts/feeds install -a
         ./scripts/feeds install luci-app-adguardhome
         ./scripts/feeds install luci-app-attendedsysupgrade
         ./scripts/feeds install luci-app-autoupdate
@@ -117,8 +116,8 @@ jobs:
       run: |
         echo "Checking dependencies..."
         make defconfig
-        make -j$(nproc) tools/install
-        make -j$(nproc) toolchain/install
+        make tools/install -j$(nproc)
+        make toolchain/install -j$(nproc)
         echo "Dependency check completed"
 
     - name: Configure OpenWrt
@@ -184,11 +183,8 @@ jobs:
       run: |
         # 开始编译，启用详细输出
         echo "Starting build process..."
-        make -j$(nproc) V=s 2>&1 | tee build.log || {
-          echo "Build failed, creating error log..."
-          tail -n 500 build.log > build_error.log
-          exit 1
-        }
+        set -o pipefail
+        make -j$(nproc) V=s 2>&1 | tee build.log || (echo "Build failed, creating error log..." && tail -n 500 build.log > build_error.log && exit 1)
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
