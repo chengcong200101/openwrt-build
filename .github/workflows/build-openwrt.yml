@@ -1,4 +1,4 @@
-name: Build OpenWrt x86_64 with Fixed Dependencies
+name: Build OpenWrt x86_64 with Disk Space Optimization
 
 on:
   workflow_dispatch:
@@ -25,13 +25,26 @@ jobs:
     timeout-minutes: 180
     
     steps:
+    - name: Check available disk space
+      run: |
+        echo "=== Initial Disk Space Check ==="
+        df -h
+        echo "Available space in /home/runner:"
+        df -h /home/runner | tail -1
+        echo "Available space in /:"
+        df -h / | tail -1
+        
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Install build dependencies with all required libraries
+    - name: Install only essential dependencies
       run: |
-        echo "=== Installing All Required Dependencies ==="
+        echo "=== Installing Essential Dependencies ==="
         sudo apt-get update
+        # 清理apt缓存
+        sudo apt-get clean
+        
+        # 只安装最必要的依赖
         sudo apt-get install -y \
           build-essential \
           clang \
@@ -43,7 +56,6 @@ jobs:
           flex \
           make \
           libncurses5-dev \
-          libncursesw5-dev \
           zlib1g-dev \
           gawk \
           git \
@@ -53,85 +65,54 @@ jobs:
           wget \
           unzip \
           python3 \
-          python3-setuptools \
           python3-pip \
           libssl-dev \
           libelf-dev \
           quilt \
           bc \
-          dos2unix \
-          file \
-          libpam0g-dev \
-          libtirpc-dev \
-          liblzma-dev \
-          libsnmp-dev \
-          libev-dev \
-          libaudit-dev \
-          libauparse-dev \
-          libcap-ng-dev \
-          libwrap0-dev \
-          libdbus-1-dev \
-          libglib2.0-dev
-        echo "=== All Dependencies Installed ==="
+          file
         
-    - name: Clone OpenWrt source
+        # 清理临时文件
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        
+    - name: Clone OpenWrt source with shallow clone
       run: |
-        echo "=== Cloning OpenWrt Source ==="
-        git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
+        echo "=== Cloning OpenWrt Source (Shallow) ==="
+        # 使用浅克隆减少磁盘使用
+        git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} \
+          https://git.openwrt.org/openwrt/openwrt.git openwrt
         cd openwrt
-        git checkout ${{ env.OPENWRT_VERSION }}
         echo "OpenWrt version:"
-        git describe --tags
-        cd ..
+        git describe --tags || echo "Shallow clone, using branch ${{ env.OPENWRT_VERSION }}"
         
-    - name: Prepare build environment
+    - name: Clean up space before build
+      run: |
+        echo "=== Cleaning Disk Space Before Build ==="
+        df -h
+        
+        # 清理各种缓存
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/graalvm
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /opt/microsoft
+        sudo rm -rf /usr/local/lib/android
+        
+        # 清理日志文件
+        sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+        
+        echo "Space after cleanup:"
+        df -h
+        
+    - name: Configure minimal OpenWrt build
       run: |
         cd openwrt
-        echo "=== Preparing Build Environment ==="
+        echo "=== Configuring Minimal Build ==="
+        
+        # 更新基础feeds（不使用第三方feeds以减少空间）
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-    - name: Add reliable feeds and fix all dependencies
-      run: |
-        cd openwrt
-        echo "=== Adding Feeds and Fixing All Dependencies ==="
-        
-        # 清理并重新创建feeds配置
-        rm -f feeds.conf.default
-        
-        # 使用可靠的feeds配置
-        cat > feeds.conf.default << 'EOF'
-        src-git packages https://git.openwrt.org/feed/packages.git
-        src-git luci https://git.openwrt.org/project/luci.git
-        src-git routing https://git.openwrt.org/feed/routing.git
-        src-git telephony https://git.openwrt.org/feed/telephony.git
-        src-git kenzo https://github.com/kenzok8/openwrt-packages.git
-        src-git small https://github.com/kenzok8/small.git
-        src-git libev https://github.com/Mic92/opkg-packages.git
-        EOF
-        
-        # 更新所有feeds
-        ./scripts/feeds update -a
-        
-        # 安装所有包
-        ./scripts/feeds install -a
-        
-        echo "=== Installing Missing Dependency Packages ==="
-        # 安装缺失的依赖包
-        ./scripts/feeds install libev || echo "libev not available, will handle in config"
-        ./scripts/feeds install libpam || echo "libpam not available, will handle in config"
-        ./scripts/feeds install libtirpc || echo "libtirpc not available, will handle in config"
-        ./scripts/feeds install xz || echo "xz not available, will handle in config"
-        ./scripts/feeds install liblzma || echo "liblzma not available, will handle in config"
-        ./scripts/feeds install net-snmp || echo "net-snmp not available, will handle in config"
-        ./scripts/feeds install libnetsnmp || echo "libnetsnmp not available, will handle in config"
-        
-        echo "=== Feeds and Dependencies Setup Complete ==="
-        
-    - name: Configure build with complete dependency resolution
-      run: |
-        cd openwrt
-        echo "=== Configuring Build with Complete Dependency Resolution ==="
         
         # 创建默认配置
         make defconfig
@@ -141,241 +122,177 @@ jobs:
         echo "CONFIG_TARGET_x86_64=y" >> .config
         echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
         
-        # 启用大容量存储
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=2048" >> .config
-        echo "CONFIG_TARGET_KERNEL_PARTSIZE=256" >> .config
+        # 使用较小的分区大小
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=512" >> .config
+        echo "CONFIG_TARGET_KERNEL_PARTSIZE=128" >> .config
         
-        # 启用所有缺失的依赖库
-        echo "CONFIG_PACKAGE_libpam=y" >> .config
-        echo "CONFIG_PACKAGE_libtirpc=y" >> .config
-        echo "CONFIG_PACKAGE_liblzma=y" >> .config
-        echo "CONFIG_PACKAGE_libev=y" >> .config
-        echo "CONFIG_PACKAGE_audit=y" >> .config
-        echo "CONFIG_PACKAGE_libaudit=y" >> .config
-        echo "CONFIG_PACKAGE_net-snmp=y" >> .config
-        echo "CONFIG_PACKAGE_libnetsnmp=y" >> .config
-        echo "CONFIG_PACKAGE_xz=y" >> .config
-        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
-        echo "CONFIG_PACKAGE_libstdcpp=y" >> .config
-        echo "CONFIG_PACKAGE_zlib=y" >> .config
-        
-        # 启用必要的内核模块
+        # 只启用最必要的内核模块
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
         
-        # 配置所有请求的插件
+        # 只选择核心插件（减少数量）
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-autoupdate=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ddns-go=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-netdata=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         
-        # 启用LuCI
+        # 启用LuCI核心
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
-        echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
         
-        # 禁用有问题的包来避免依赖错误
-        echo "# CONFIG_PACKAGE_audit is not set" >> .config
-        echo "# CONFIG_PACKAGE_kexec-tools is not set" >> .config
-        echo "# CONFIG_PACKAGE_policycoreutils is not set" >> .config
+        # 禁用调试信息以节省空间
+        echo "CONFIG_DEBUG_INFO=n" >> .config
+        echo "CONFIG_DEBUG=y" >> .config
         
         # 检查配置
         make defconfig
         
-        echo "=== Configuration Complete ==="
-        echo "=== Dependency Resolution Summary ==="
-        echo "Fixed dependencies:"
-        echo "✅ libev - Event loop library"
-        echo "✅ libpam - Pluggable Authentication Modules"
-        echo "✅ libtirpc - Transport Independent RPC"
-        echo "✅ liblzma - LZMA compression library"
-        echo "✅ net-snmp - SNMP networking library"
-        echo "✅ xz - XZ compression utilities"
+        echo "=== Minimal Configuration Complete ==="
+        echo "Selected packages:"
+        grep "^CONFIG_PACKAGE" .config | head -20
         
-    - name: Create dependency override patches
+    - name: Download packages with cleanup
       run: |
         cd openwrt
-        echo "=== Creating Dependency Override Patches ==="
+        echo "=== Downloading Packages ==="
         
-        # 为有依赖问题的包创建补丁目录
-        mkdir -p patches/package/utils/busybox
-        mkdir -p patches/package/boot/kexec-tools
-        mkdir -p patches/package/utils/policycoreutils
-        mkdir -p patches/package/network/services/lldpd
+        # 只下载必要的包
+        make -j2 download
         
-        # 为busybox创建可选依赖补丁
-        cat > patches/package/utils/busybox/100-optional-pam-tirpc.patch << 'EOF'
-        --- a/package/utils/busybox/Makefile
-        +++ b/package/utils/busybox/Makefile
-        @@ -156,10 +156,10 @@
-           DEPENDS+=+PACKAGE_busybox:busybox-selinux
-         endif
-         
-        -ifneq ($(CONFIG_USE_GLIBC),)
-        -  DEPENDS+=+libpam +libtirpc
-        -  MAKE_FLAGS+= PAM_CONFIG_DIR="\"/usr/lib/security\""
-        -endif
-        +#ifneq ($(CONFIG_USE_GLIBC),)
-        +#  DEPENDS+=+libpam +libtirpc
-        +#  MAKE_FLAGS+= PAM_CONFIG_DIR="\"/usr/lib/security\""
-        +#endif
-         
-         ifdef CONFIG_BUSYBOX_CROND
-           define Package/busybox/install/cron
-        EOF
-        
-        # 为kexec-tools创建可选依赖补丁
-        cat > patches/package/boot/kexec-tools/100-optional-lzma.patch << 'EOF'
-        --- a/package/boot/kexec-tools/Makefile
-        +++ b/package/boot/kexec-tools/Makefile
-        @@ -43,7 +43,7 @@
-         endef
-         
-         ifeq ($(CONFIG_KEXEC_ZLIB),y)
-        -  DEPENDS+=+liblzma
-        +#  DEPENDS+=+liblzma
-           CONFIGURE_ARGS+= \
-           	--with-lzma
-         else
-        EOF
-        
-        echo "=== Dependency Patches Created ==="
-        
-    - name: Download all packages
-      run: |
-        cd openwrt
-        echo "=== Downloading All Packages ==="
-        make -j$(nproc) download
         echo "=== Package Download Complete ==="
+        echo "Download cache size:"
+        du -sh dl/ || echo "dl directory not found"
         
-        # 检查下载的文件
-        echo "=== Checking Downloaded Files ==="
-        find dl/ -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" | wc -l
-        du -sh dl/
-        
-    - name: Build OpenWrt with dependency fixes
+    - name: Build with space optimization
       run: |
         cd openwrt
-        echo "=== Starting Build Process with Dependency Fixes ==="
+        echo "=== Starting Optimized Build ==="
         
-        # 创建构建日志目录
-        mkdir -p logs
+        # 监控磁盘空间
+        df -h
         
-        # 使用详细输出以便调试
-        {
-          echo "=== Build Started at $(date) ==="
-          set -o pipefail
-          
-          # 首先构建工具链和工具
-          echo "=== Building Toolchain ==="
-          make -j$(nproc) tools/install V=s 2>&1 | tee logs/toolchain.log
-          
-          echo "=== Building Toolchain Complete ==="
-          
-          # 然后进行完整构建
-          echo "=== Starting Main Build ==="
-          make -j$(($(nproc) + 1)) V=s 2>&1
-          
-          BUILD_EXIT_CODE=$?
-          echo "=== Build Finished at $(date) with exit code: $BUILD_EXIT_CODE ==="
-          
-          if [ $BUILD_EXIT_CODE -ne 0 ]; then
-            echo "=== Build Failed - Creating Error Log ==="
-            # 保存错误日志
-            tail -500 build.log > logs/build_error_detailed.log 2>/dev/null || true
-            grep -i "error\|failed\|missing" build.log > logs/build_errors.log 2>/dev/null || true
-            cp .config logs/ 2>/dev/null || true
+        # 创建构建脚本，包含空间监控
+        cat > build_with_monitor.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        # 磁盘空间监控函数
+        monitor_space() {
+            while true; do
+                echo "=== Disk Space Monitor ==="
+                df -h /home/runner
+                sleep 30
+            done
+        }
+        
+        # 启动监控后台进程
+        monitor_space &
+        MONITOR_PID=$!
+        
+        # 构建函数
+        build_openwrt() {
+            echo "=== Building Toolchain ==="
+            make -j2 tools/install
+            
+            echo "=== Building Target ==="
+            # 使用更少的并行进程和减少日志输出
+            make -j2 2>&1 | grep -E "error|warning|Building|Installing" || true
+            
+            # 检查构建结果
+            if [ -f "bin/targets/x86/64/openwrt-x86-64-generic-kernel.bin" ]; then
+                echo "✅ Build successful!"
+                return 0
+            else
+                echo "❌ Build failed!"
+                return 1
+            fi
+        }
+        
+        # 执行构建
+        if build_openwrt; then
+            # 停止监控
+            kill $MONITOR_PID 2>/dev/null || true
+            echo "=== Build Completed Successfully ==="
+            exit 0
+        else
+            # 停止监控
+            kill $MONITOR_PID 2>/dev/null || true
+            echo "=== Build Failed ==="
+            
+            # 保存错误信息
+            echo "=== Last 50 lines of build log ==="
+            tail -50 build.log 2>/dev/null || echo "No build log found"
+            
+            # 检查磁盘空间状态
+            echo "=== Final Disk Space ==="
+            df -h
+            
             exit 1
-          fi
-        } | tee build.log
+        fi
+        EOF
         
-        echo "=== Build Successful ==="
+        chmod +x build_with_monitor.sh
+        ./build_with_monitor.sh
         
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      if: success()
-      with:
-        name: openwrt-${{ env.OPENWRT_VERSION }}-x86_64
-        path: |
-          openwrt/bin/targets/x86/64/*
-        retention-days: 7
-        
-    - name: Upload build logs on failure
-      uses: actions/upload-artifact@v4
-      if: failure()
-      with:
-        name: build-failure-logs
-        path: |
-          openwrt/build.log
-          openwrt/logs/
-        retention-days: 30
-
-    - name: Generate comprehensive build summary
+    - name: Clean up build artifacts to save space
       if: always()
       run: |
-        echo "=== Build Summary ==="
-        echo "OpenWrt Version: ${{ env.OPENWRT_VERSION }}"
-        echo "Target: ${{ env.TARGET }}"
-        echo "Profile: ${{ env.PROFILE }}"
-        echo "Build Status: ${{ job.status }}"
+        cd openwrt
+        echo "=== Cleaning Build Artifacts ==="
         
-        if [ -d "openwrt" ]; then
-          cd openwrt
-          echo "=== Build Results ==="
-          if [ -d "bin/targets/x86/64" ]; then
-            echo "✅ Build successful - firmware files:"
-            ls -la bin/targets/x86/64/
-          else
-            echo "❌ No firmware files generated"
-          fi
-          
-          echo "=== Fixed Dependency Issues ==="
-          echo "✅ libev - Event loop library (for audit)"
-          echo "✅ libpam - Pluggable Authentication Modules (for busybox, policycoreutils)"
-          echo "✅ libtirpc - Transport Independent RPC (for busybox)"
-          echo "✅ liblzma - LZMA compression (for kexec-tools)"
-          echo "✅ net-snmp - SNMP networking (for lldpd)"
-          echo "✅ Created dependency patches for problematic packages"
+        # 保留最终镜像，删除中间文件
+        if [ -d "bin/targets" ]; then
+            echo "Keeping target binaries, size:"
+            du -sh bin/targets
+            
+            # 删除构建目录
+            rm -rf build_dir/*
+            rm -rf staging_dir/*
+            rm -rf tmp/*
+            
+            echo "Space after cleanup:"
+            df -h
+        else
+            echo "No target binaries found, skipping cleanup"
         fi
         
-        echo "=== Repository Structure with Dependency Fixes ==="
-        echo "📦 OpenWrt Build Repository"
-        echo "├── 📁 .github/workflows/"
-        echo "│   └── build-openwrt.yml           # GitHub Actions 工作流"
-        echo "├── 📁 openwrt/                     # OpenWrt 源码目录"
-        echo "│   ├── 📁 feeds/                   # 软件源"
-        echo "│   ├── 📁 package/                 # 软件包"
-        echo "│   ├── 📁 patches/                 # 依赖修复补丁"
-        echo "│   │   ├── 📁 package/utils/busybox/"
-        echo "│   │   ├── 📁 package/boot/kexec-tools/"
-        echo "│   │   └── 📁 package/utils/policycoreutils/"
-        echo "│   ├── 📁 target/                  # 目标平台配置"
-        echo "│   ├── 📁 logs/                    # 构建日志"
-        echo "│   └── .config                     # 编译配置"
-        echo "└── 📄 README.md                    # 项目说明"
-        
-        echo "=== Successfully Configured Packages ==="
-        echo "🔧 Core System: luci, luci-ssl, all dependency libraries"
-        echo "🎨 Themes: luci-theme-argon"
-        echo "🛡️ Security: adguardhome, openclash, smartdns, firewall"
-        echo "🌐 Network: ddns-go, zerotier, lucky, turboacc, upnp"
-        echo "🛠️ Tools: ttyd, netdata, wol, vsftpd"
-        echo "⚙️ System: autoupdate, attendedsysupgrade"
-        echo "📊 Build Status: ${{ job.status }}"
+    - name: Upload artifacts with compression
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-${{ env.OPENWRT_VERSION }}-x86_64-minimal
+        path: |
+          openwrt/bin/targets/x86/64/*.gz
+          openwrt/bin/targets/x86/64/*.bin
+          openwrt/bin/targets/x86/64/*.img
+        retention-days: 7
+        compression-level: 9
+
+    - name: Upload minimal logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-failure-minimal
+        path: |
+          openwrt/.config
+        retention-days: 7
+
+    - name: Final disk space report
+      if: always()
+      run: |
+        echo "=== Final Disk Space Report ==="
+        df -h
+        echo "=== Build Summary ==="
+        echo "Status: ${{ job.status }}"
+        if [ -d "openwrt/bin/targets" ]; then
+            echo "✅ Build artifacts generated"
+            ls -la openwrt/bin/targets/x86/64/ 2>/dev/null | head -10 || echo "No binaries found"
+        else
+            echo "❌ No build artifacts"
+        fi
