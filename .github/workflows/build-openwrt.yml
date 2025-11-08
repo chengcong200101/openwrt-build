@@ -92,50 +92,45 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-    - name: Add third-party feeds and fix dependencies
+    - name: Add working third-party feeds
       run: |
         cd openwrt
-        echo "=== Adding Third-party Feeds and Fixing Dependencies ==="
+        echo "=== Adding Working Third-party Feeds ==="
         
-        # 添加第三方软件源
-        cat >> feeds.conf.default << EOF
-        src-git passwall https://github.com/xiaorouji/openwrt-passwall;packages
-        src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2;main
-        src-git openclash https://github.com/vernesong/OpenClash;master
-        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome;master
-        src-git smartdns https://github.com/pymumu/openwrt-smartdns;master
-        src-git sirpdboy https://github.com/sirpdboy/openwrt-package;main
-        src-git jerrykuku https://github.com/jerrykuku/openwrt-package;master
-        src-git kenzo https://github.com/kenzok8/openwrt-packages;master
-        src-git small https://github.com/kenzok8/small;master
-        src-git libs https://github.com/openwrt/packages;master
+        # 清理可能存在的错误feeds
+        rm -f feeds.conf.default
+        
+        # 重新创建feeds配置，只使用可靠来源
+        cat > feeds.conf.default << 'EOF'
+        src-git packages https://git.openwrt.org/feed/packages.git
+        src-git luci https://git.openwrt.org/project/luci.git
+        src-git routing https://git.openwrt.org/feed/routing.git
+        src-git telephony https://git.openwrt.org/feed/telephony.git
+        src-git kenzo https://github.com/kenzok8/openwrt-packages.git
+        src-git small https://github.com/kenzok8/small.git
+        src-git openclash https://github.com/vernesong/OpenClash.git
         EOF
         
-        # 更新所有feeds
+        # 更新核心feeds
         ./scripts/feeds update -a
+        
+        # 先安装核心包
         ./scripts/feeds install -a
         
-        # 安装缺失的依赖包
-        echo "=== Installing Missing Dependencies ==="
-        ./scripts/feeds install libpam
-        ./scripts/feeds install libtirpc
-        ./scripts/feeds install xz
-        ./scripts/feeds install net-snmp
-        ./scripts/feeds install liblzma
-        ./scripts/feeds install libnetsnmp
+        echo "=== Feeds Update Complete ==="
         
-    - name: Configure build with dependency fixes
+    - name: Configure build with reliable packages
       run: |
         cd openwrt
-        echo "=== Configuring Build with Dependency Fixes ==="
+        echo "=== Configuring Build with Reliable Packages ==="
         
         # 创建默认配置
         make defconfig
         
         # 配置目标平台
-        sed -i 's/CONFIG_TARGET_x86_generic_Generic/CONFIG_TARGET_x86_generic_Generic=y/g' .config
-        sed -i 's/CONFIG_TARGET_x86=y/CONFIG_TARGET_x86=y/g' .config
-        sed -i 's/CONFIG_TARGET_x86_64=y/CONFIG_TARGET_x86_64=y/g' .config
+        echo "CONFIG_TARGET_x86=y" >> .config
+        echo "CONFIG_TARGET_x86_64=y" >> .config
+        echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
         
         # 启用大容量存储
         echo "CONFIG_TARGET_ROOTFS_PARTSIZE=2048" >> .config
@@ -154,26 +149,19 @@ jobs:
         echo "CONFIG_PACKAGE_libpam=y" >> .config
         echo "CONFIG_PACKAGE_libtirpc=y" >> .config
         echo "CONFIG_PACKAGE_liblzma=y" >> .config
-        echo "CONFIG_PACKAGE_xz=y" >> .config
-        echo "CONFIG_PACKAGE_net-snmp=y" >> .config
-        echo "CONFIG_PACKAGE_libnetsnmp=y" >> .config
         echo "CONFIG_PACKAGE_libopenssl=y" >> .config
         echo "CONFIG_PACKAGE_libstdcpp=y" >> .config
         echo "CONFIG_PACKAGE_zlib=y" >> .config
         
-        # 配置插件
+        # 配置可用的插件（从kenzo和小包源获取）
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-autoupdate=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-control-webrestriction=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-control-weburl=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ddns-go=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-netdata=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
@@ -192,6 +180,24 @@ jobs:
         make defconfig
         echo "=== Configuration Complete ==="
         
+        # 显示配置摘要
+        echo "=== Configuration Summary ==="
+        grep "CONFIG_PACKAGE_luci" .config | head -20
+        
+    - name: Install specific packages manually
+      run: |
+        cd openwrt
+        echo "=== Manually Installing Missing Packages ==="
+        
+        # 尝试手动安装缺失的包
+        # 对于控制类插件，使用替代方案或从其他源获取
+        ./scripts/feeds install luci-app-passwall || echo "Passwall not available, skipping"
+        
+        # 安装家长控制替代方案
+        ./scripts/feeds install luci-app-accesscontrol || echo "Access control alternative not available"
+        
+        echo "=== Manual Package Installation Complete ==="
+        
     - name: Check and fix dependencies
       run: |
         cd openwrt
@@ -199,8 +205,8 @@ jobs:
         
         # 检查缺失的依赖
         echo "Checking for missing dependencies..."
-        make -j$(nproc) tools/install V=s 2>&1 | grep -i "missing" || true
-        make -j$(nproc) toolchain/install V=s 2>&1 | grep -i "missing" || true
+        make -j$(nproc) tools/install V=s 2>&1 | grep -i "missing\|error\|warning" || true
+        make -j$(nproc) toolchain/install V=s 2>&1 | grep -i "missing\|error\|warning" || true
         
         echo "=== Dependency Check Complete ==="
         
@@ -214,7 +220,7 @@ jobs:
         # 检查下载是否完整
         echo "=== Checking Downloaded Packages ==="
         find dl/ -name "*.zip" -o -name "*.tar.*" -o -name "*.tgz" | wc -l
-        ls -la dl/ | head -20
+        ls -la dl/ | head -10
         
     - name: Build OpenWrt
       run: |
@@ -227,6 +233,7 @@ jobs:
         # 使用详细输出以便调试，并保存到日志文件
         {
           echo "=== Build Started at $(date) ==="
+          set -o pipefail
           make -j$(($(nproc) + 1)) V=s 2>&1
           BUILD_EXIT_CODE=$?
           echo "=== Build Finished at $(date) with exit code: $BUILD_EXIT_CODE ==="
@@ -279,12 +286,11 @@ jobs:
           echo "Binaries directory:"
           ls -la bin/targets/*/ 2>/dev/null || echo "No binaries built"
           
-          echo "=== Fixed Dependencies ==="
-          echo "✅ libpam - PAM authentication library"
-          echo "✅ libtirpc - Transport Independent RPC library"
-          echo "✅ liblzma - LZMA compression library"
-          echo "✅ net-snmp - SNMP networking library"
-          echo "✅ xz - XZ compression utilities"
+          echo "=== Available Packages Summary ==="
+          echo "✅ Core packages and dependencies configured"
+          echo "✅ Reliable third-party feeds: kenzo, small"
+          echo "✅ Most requested plugins included"
+          echo "⚠️  Some problematic feeds removed for stability"
         fi
         
         echo "=== Repository Structure ==="
@@ -302,8 +308,8 @@ jobs:
         echo "=== Included Packages ==="
         echo "🔧 Core: luci, luci-ssl, libpam, libtirpc, liblzma"
         echo "🎨 Theme: luci-theme-argon"
-        echo "🛡️ Security: adguardhome, passwall, openclash, smartdns"
+        echo "🛡️ Security: adguardhome, openclash, smartdns"
         echo "🌐 Network: ddns-go, zerotier, lucky, turboacc"
         echo "🛠️ Tools: ttyd, netdata, wol, upnp, vsftpd"
-        echo "⚙️ System: autoupdate, package-manager, attendedsysupgrade"
-        echo "👨‍👩‍👧‍👦 Parental Control: webrestriction, weburl"
+        echo "⚙️ System: autoupdate, attendedsysupgrade, firewall"
+        echo "📊 Status: Build completed with status: ${{ job.status }}"
