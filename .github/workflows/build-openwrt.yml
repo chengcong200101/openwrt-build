@@ -73,9 +73,9 @@ jobs:
         src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
         src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
         src-git openclash https://github.com/vernesong/OpenClash.git;master
-        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;master
+        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;main
         src-git smartdns https://github.com/pymumu/smartdns.git;master
-        src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;master
+        src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;1.10.6
         src-git ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git;main
         src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;main
         src-git netdata https://github.com/sirpdboy/luci-app-netdata.git;main
@@ -87,33 +87,53 @@ jobs:
     - name: Update and install feeds
       working-directory: ./openwrt
       run: |
-        ./scripts/feeds update -a
+        # 先更新官方源
+        echo "Updating official feeds..."
+        ./scripts/feeds update packages luci routing telephony base
+        
+        # 逐个更新第三方源，忽略失败
+        echo "Updating third-party feeds..."
+        for feed in passwall_packages passwall openclash adguardhome smartdns zerotier ddns_go lucky netdata turboacc autoupdate control; do
+          echo "Updating feed: $feed"
+          ./scripts/feeds update $feed || echo "Feed $feed update failed, but continuing..."
+        done
+        
+        # 安装所有可用的包
+        echo "Installing all available packages..."
         ./scripts/feeds install -a
 
     - name: Install specific packages
       working-directory: ./openwrt
       run: |
-        # 安装所有需要的包
-        ./scripts/feeds install luci-app-adguardhome
-        ./scripts/feeds install luci-app-attendedsysupgrade
-        ./scripts/feeds install luci-app-autoupdate
-        ./scripts/feeds install luci-app-control-webrestriction
-        ./scripts/feeds install luci-app-control-weburl
-        ./scripts/feeds install luci-app-ddns-go
-        ./scripts/feeds install luci-app-firewall
-        ./scripts/feeds install luci-app-lucky
-        ./scripts/feeds install luci-app-netdata
-        ./scripts/feeds install luci-app-openclash
-        ./scripts/feeds install luci-app-package-manager
-        ./scripts/feeds install luci-app-passwall
-        ./scripts/feeds install luci-app-smartdns
-        ./scripts/feeds install luci-app-ttyd
-        ./scripts/feeds install luci-app-turboacc
-        ./scripts/feeds install luci-app-upnp
-        ./scripts/feeds install luci-app-vsftpd
-        ./scripts/feeds install luci-app-wol
-        ./scripts/feeds install luci-app-zerotier
-        ./scripts/feeds install luci-theme-argon
+        # 尝试安装所有需要的包，忽略失败
+        echo "Installing specific packages..."
+        packages=(
+          "luci-app-adguardhome"
+          "luci-app-attendedsysupgrade"
+          "luci-app-autoupdate"
+          "luci-app-control-webrestriction"
+          "luci-app-control-weburl"
+          "luci-app-ddns-go"
+          "luci-app-firewall"
+          "luci-app-lucky"
+          "luci-app-netdata"
+          "luci-app-openclash"
+          "luci-app-package-manager"
+          "luci-app-passwall"
+          "luci-app-smartdns"
+          "luci-app-ttyd"
+          "luci-app-turboacc"
+          "luci-app-upnp"
+          "luci-app-vsftpd"
+          "luci-app-wol"
+          "luci-app-zerotier"
+          "luci-theme-argon"
+        )
+        
+        for pkg in "${packages[@]}"; do
+          echo "Installing $pkg..."
+          ./scripts/feeds install $pkg || echo "Package $pkg installation failed, but continuing..."
+        done
 
     - name: Check dependencies
       working-directory: ./openwrt
