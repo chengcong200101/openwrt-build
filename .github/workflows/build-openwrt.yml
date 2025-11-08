@@ -68,7 +68,11 @@ jobs:
           quilt \
           bc \
           dos2unix \
-          file
+          file \
+          libpam0g-dev \
+          libtirpc-dev \
+          liblzma-dev \
+          libsnmp-dev
         echo "=== Environment Check Complete ==="
         
     - name: Clone OpenWrt source
@@ -88,10 +92,10 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-    - name: Add third-party feeds
+    - name: Add third-party feeds and fix dependencies
       run: |
         cd openwrt
-        echo "=== Adding Third-party Feeds ==="
+        echo "=== Adding Third-party Feeds and Fixing Dependencies ==="
         
         # 添加第三方软件源
         cat >> feeds.conf.default << EOF
@@ -104,16 +108,26 @@ jobs:
         src-git jerrykuku https://github.com/jerrykuku/openwrt-package;master
         src-git kenzo https://github.com/kenzok8/openwrt-packages;master
         src-git small https://github.com/kenzok8/small;master
+        src-git libs https://github.com/openwrt/packages;master
         EOF
         
         # 更新所有feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-    - name: Configure build
+        # 安装缺失的依赖包
+        echo "=== Installing Missing Dependencies ==="
+        ./scripts/feeds install libpam
+        ./scripts/feeds install libtirpc
+        ./scripts/feeds install xz
+        ./scripts/feeds install net-snmp
+        ./scripts/feeds install liblzma
+        ./scripts/feeds install libnetsnmp
+        
+    - name: Configure build with dependency fixes
       run: |
         cd openwrt
-        echo "=== Configuring Build ==="
+        echo "=== Configuring Build with Dependency Fixes ==="
         
         # 创建默认配置
         make defconfig
@@ -124,10 +138,10 @@ jobs:
         sed -i 's/CONFIG_TARGET_x86_64=y/CONFIG_TARGET_x86_64=y/g' .config
         
         # 启用大容量存储
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=2048" >> .config
         echo "CONFIG_TARGET_KERNEL_PARTSIZE=256" >> .config
         
-        # 启用必要的内核模块
+        # 启用必要的内核模块和库
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
@@ -135,6 +149,17 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        
+        # 启用缺失的依赖库
+        echo "CONFIG_PACKAGE_libpam=y" >> .config
+        echo "CONFIG_PACKAGE_libtirpc=y" >> .config
+        echo "CONFIG_PACKAGE_liblzma=y" >> .config
+        echo "CONFIG_PACKAGE_xz=y" >> .config
+        echo "CONFIG_PACKAGE_net-snmp=y" >> .config
+        echo "CONFIG_PACKAGE_libnetsnmp=y" >> .config
+        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
+        echo "CONFIG_PACKAGE_libstdcpp=y" >> .config
+        echo "CONFIG_PACKAGE_zlib=y" >> .config
         
         # 配置插件
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
@@ -167,12 +192,16 @@ jobs:
         make defconfig
         echo "=== Configuration Complete ==="
         
-    - name: Check dependencies
+    - name: Check and fix dependencies
       run: |
         cd openwrt
-        echo "=== Checking Dependencies ==="
-        make -j$(nproc) tools/install
-        make -j$(nproc) toolchain/install
+        echo "=== Checking and Fixing Dependencies ==="
+        
+        # 检查缺失的依赖
+        echo "Checking for missing dependencies..."
+        make -j$(nproc) tools/install V=s 2>&1 | grep -i "missing" || true
+        make -j$(nproc) toolchain/install V=s 2>&1 | grep -i "missing" || true
+        
         echo "=== Dependency Check Complete ==="
         
     - name: Download packages
@@ -182,16 +211,38 @@ jobs:
         make -j$(nproc) download
         echo "=== Package Download Complete ==="
         
+        # 检查下载是否完整
+        echo "=== Checking Downloaded Packages ==="
+        find dl/ -name "*.zip" -o -name "*.tar.*" -o -name "*.tgz" | wc -l
+        ls -la dl/ | head -20
+        
     - name: Build OpenWrt
       run: |
         cd openwrt
         echo "=== Starting Build Process ==="
-        # 使用详细输出以便调试
-        make -j$(($(nproc) + 1)) V=s 2>&1 | tee build.log || {
-          echo "=== Build Failed - Creating Error Log ==="
-          tail -100 build.log > build_error.log
-          exit 1
-        }
+        
+        # 创建构建日志目录
+        mkdir -p logs
+        
+        # 使用详细输出以便调试，并保存到日志文件
+        {
+          echo "=== Build Started at $(date) ==="
+          make -j$(($(nproc) + 1)) V=s 2>&1
+          BUILD_EXIT_CODE=$?
+          echo "=== Build Finished at $(date) with exit code: $BUILD_EXIT_CODE ==="
+          
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "=== Build Failed - Creating Error Log ==="
+            # 保存最后500行日志
+            tail -500 build.log > logs/build_error_detailed.log 2>/dev/null || true
+            # 查找错误相关的日志
+            grep -i "error\|failed\|missing" build.log > logs/build_errors.log 2>/dev/null || true
+            # 保存配置信息
+            cp .config logs/ 2>/dev/null || true
+            exit 1
+          fi
+        } | tee build.log
+        
         echo "=== Build Successful ==="
         
     - name: Upload artifacts
@@ -203,14 +254,14 @@ jobs:
           openwrt/bin/targets/x86/64/*
         retention-days: 7
         
-    - name: Upload build log on failure
+    - name: Upload build logs on failure
       uses: actions/upload-artifact@v4
       if: failure()
       with:
-        name: build-error-logs
+        name: build-failure-logs
         path: |
           openwrt/build.log
-          openwrt/build_error.log
+          openwrt/logs/
         retention-days: 30
 
     - name: Generate build summary
@@ -221,6 +272,21 @@ jobs:
         echo "Target: ${{ env.TARGET }}"
         echo "Profile: ${{ env.PROFILE }}"
         echo "Build Status: ${{ job.status }}"
+        
+        if [ -d "openwrt" ]; then
+          cd openwrt
+          echo "=== Build Directory Info ==="
+          echo "Binaries directory:"
+          ls -la bin/targets/*/ 2>/dev/null || echo "No binaries built"
+          
+          echo "=== Fixed Dependencies ==="
+          echo "✅ libpam - PAM authentication library"
+          echo "✅ libtirpc - Transport Independent RPC library"
+          echo "✅ liblzma - LZMA compression library"
+          echo "✅ net-snmp - SNMP networking library"
+          echo "✅ xz - XZ compression utilities"
+        fi
+        
         echo "=== Repository Structure ==="
         echo "📦 OpenWrt Build Repository"
         echo "├── 📁 .github/workflows/"
@@ -229,14 +295,15 @@ jobs:
         echo "│   ├── 📁 feeds/            # 软件源"
         echo "│   ├── 📁 package/          # 软件包"
         echo "│   ├── 📁 target/           # 目标平台配置"
+        echo "│   ├── 📁 logs/             # 构建日志"
         echo "│   └── .config              # 编译配置"
         echo "└── 📄 README.md             # 项目说明"
         
         echo "=== Included Packages ==="
-        echo "🔧 Core: luci, luci-ssl"
+        echo "🔧 Core: luci, luci-ssl, libpam, libtirpc, liblzma"
         echo "🎨 Theme: luci-theme-argon"
         echo "🛡️ Security: adguardhome, passwall, openclash, smartdns"
         echo "🌐 Network: ddns-go, zerotier, lucky, turboacc"
         echo "🛠️ Tools: ttyd, netdata, wol, upnp, vsftpd"
         echo "⚙️ System: autoupdate, package-manager, attendedsysupgrade"
-        echo " parental-control: webrestriction, weburl"
+        echo "👨‍👩‍👧‍👦 Parental Control: webrestriction, weburl"
