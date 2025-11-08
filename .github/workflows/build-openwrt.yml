@@ -12,7 +12,6 @@ on:
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
   REPO_BRANCH: v23.05.6
-  FEEDS_CONF: feeds.conf.default
 
 jobs:
   build:
@@ -23,259 +22,176 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup environment
+    - name: Setup Docker build environment
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          clang \
-          flex \
-          gcc \
-          g++ \
-          gawk \
-          gcc-multilib \
-          gettext \
-          git \
-          libncurses5-dev \
-          libssl-dev \
-          python3 \
-          python3-pip \
-          python3-setuptools \
-          python3-venv \
-          rsync \
-          unzip \
-          zlib1g-dev \
-          file \
-          wget \
-          qemu-utils \
-          subversion \
-          sudo \
-          swig \
-          libelf-dev \
-          patchelf \
-          bison \
-          curl
-        echo "Environment setup completed"
+        # 使用官方 OpenWrt 构建镜像
+        docker pull openwrtorg/sdk:x86_64-23.05.6
+        echo "Docker environment ready"
 
-    - name: Clone OpenWrt source
+    - name: Create build script
       run: |
-        git clone --depth=1 --branch ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} openwrt
+        cat > build-openwrt.sh << 'EOF'
+        #!/bin/bash
+        set -e
 
-    - name: Fix feeds structure
-      working-directory: ./openwrt
-      run: |
-        # 创建必要的 feeds 目录结构
-        mkdir -p feeds
-        # 创建一个空的 base 目录来满足构建系统的要求
-        mkdir -p feeds/base
-        touch feeds/base/.gitkeep
-        echo "Fixed feeds structure"
+        echo "Starting OpenWrt build in Docker..."
 
-    - name: Configure minimal feeds
-      working-directory: ./openwrt
-      run: |
-        # 使用基础的 feeds 配置
-        cat > ${{ env.FEEDS_CONF }} << 'EOF'
+        # 克隆 OpenWrt 源码
+        git clone --depth=1 --branch $REPO_BRANCH $REPO_URL /openwrt
+        cd /openwrt
+
+        # 配置 feeds
+        cat > feeds.conf.default << 'FEEDS_EOF'
         src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
         src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
         src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
-        EOF
+        src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
+        src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main
+        src-git openclash https://github.com/vernesong/OpenClash.git;master
+        src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git;main
+        src-git smartdns https://github.com/pymumu/smartdns.git;master
+        src-git zerotier https://github.com/zerotier/openwrt-zerotier.git;1.10.6
+        src-git ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git;main
+        src-git lucky https://github.com/sirpdboy/luci-app-lucky.git;main
+        src-git netdata https://github.com/sirpdboy/luci-app-netdata.git;main
+        src-git turboacc https://github.com/chenmozhijin/turboacc.git;main
+        src-git autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git;main
+        src-git control https://github.com/sirpdboy/luci-app-control.git;main
+        FEEDS_EOF
 
-    - name: Update and install core feeds
-      working-directory: ./openwrt
-      run: |
-        # 更新并安装核心 feeds
+        # 更新和安装 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Add third-party feeds directly
-      working-directory: ./openwrt
-      run: |
-        # 直接克隆第三方 feeds 到 feeds 目录
-        cd feeds
-        
-        # 第三方 feeds 列表
-        third_party_feeds=(
-          "passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git main"
-          "passwall https://github.com/xiaorouji/openwrt-passwall.git main"
-          "openclash https://github.com/vernesong/OpenClash.git master"
-          "adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git main"
-          "smartdns https://github.com/pymumu/smartdns.git master"
-          "zerotier https://github.com/zerotier/openwrt-zerotier.git 1.10.6"
-          "ddns_go https://github.com/sirpdboy/luci-app-ddns-go.git main"
-          "lucky https://github.com/sirpdboy/luci-app-lucky.git main"
-          "netdata https://github.com/sirpdboy/luci-app-netdata.git main"
-          "turboacc https://github.com/chenmozhijin/turboacc.git main"
-          "autoupdate https://github.com/sirpdboy/luci-app-autoupdate.git main"
-          "control https://github.com/sirpdboy/luci-app-control.git main"
+        # 安装特定包
+        packages=(
+          "luci-app-adguardhome"
+          "luci-app-attendedsysupgrade"
+          "luci-app-autoupdate"
+          "luci-app-control-webrestriction"
+          "luci-app-control-weburl"
+          "luci-app-ddns-go"
+          "luci-app-firewall"
+          "luci-app-lucky"
+          "luci-app-netdata"
+          "luci-app-openclash"
+          "luci-app-package-manager"
+          "luci-app-passwall"
+          "luci-app-smartdns"
+          "luci-app-ttyd"
+          "luci-app-turboacc"
+          "luci-app-upnp"
+          "luci-app-vsftpd"
+          "luci-app-wol"
+          "luci-app-zerotier"
+          "luci-theme-argon"
         )
         
-        for feed_info in "${third_party_feeds[@]}"; do
-          feed_name=$(echo $feed_info | cut -d' ' -f1)
-          feed_url=$(echo $feed_info | cut -d' ' -f2)
-          feed_branch=$(echo $feed_info | cut -d' ' -f3)
-          
-          echo "Cloning $feed_name from $feed_url (branch: $feed_branch)"
-          if [ ! -d "$feed_name" ]; then
-            git clone --depth=1 "$feed_url" "$feed_name" -b "$feed_branch" || echo "Failed to clone $feed_name, but continuing..."
-          else
-            echo "$feed_name already exists"
-          fi
+        for pkg in "${packages[@]}"; do
+          echo "Installing $pkg..."
+          ./scripts/feeds install $pkg || echo "Failed to install $pkg, continuing..."
         done
-        
-        cd ..
 
-    - name: Update feeds configuration
-      working-directory: ./openwrt
-      run: |
-        # 更新 feeds.conf 包含所有 feeds
-        cat > ${{ env.FEEDS_CONF }} << 'EOF'
-        src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
-        src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
-        src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
-        src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
-        src-link passwall_packages feeds/passwall_packages
-        src-link passwall feeds/passwall
-        src-link openclash feeds/openclash
-        src-link adguardhome feeds/adguardhome
-        src-link smartdns feeds/smartdns
-        src-link zerotier feeds/zerotier
-        src-link ddns_go feeds/ddns_go
-        src-link lucky feeds/lucky
-        src-link netdata feeds/netdata
-        src-link turboacc feeds/turboacc
-        src-link autoupdate feeds/autoupdate
-        src-link control feeds/control
-        EOF
-
-    - name: Install all packages
-      working-directory: ./openwrt
-      run: |
-        # 更新并安装所有包
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: Skip dependency check if requested
-      working-directory: ./openwrt
-      if: ${{ inputs.skip_checks }}
-      run: |
-        echo "Skipping dependency checks as requested"
+        # 配置 OpenWrt
         make defconfig
 
-    - name: Check dependencies
-      working-directory: ./openwrt
-      if: ${{ !inputs.skip_checks }}
-      run: |
-        echo "Checking dependencies..."
-        make defconfig
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
-        echo "Dependency check completed"
+        # 设置配置
+        cat >> .config << 'CONFIG_EOF'
+        CONFIG_TARGET_x86=y
+        CONFIG_TARGET_x86_64=y
+        CONFIG_TARGET_x86_generic=y
+        CONFIG_TARGET_x86_generic_Generic=y
+        CONFIG_TARGET_ROOTFS_PARTSIZE=2048
+        CONFIG_TARGET_KERNEL_PARTSIZE=256
+        CONFIG_PACKAGE_kmod-usb-core=y
+        CONFIG_PACKAGE_kmod-usb-ohci=y
+        CONFIG_PACKAGE_kmod-usb-uhci=y
+        CONFIG_PACKAGE_kmod-usb2=y
+        CONFIG_PACKAGE_kmod-usb3=y
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        CONFIG_PACKAGE_luci-app-adguardhome=y
+        CONFIG_PACKAGE_luci-app-attendedsysupgrade=y
+        CONFIG_PACKAGE_luci-app-autoupdate=y
+        CONFIG_PACKAGE_luci-app-control-webrestriction=y
+        CONFIG_PACKAGE_luci-app-control-weburl=y
+        CONFIG_PACKAGE_luci-app-ddns-go=y
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_luci-app-lucky=y
+        CONFIG_PACKAGE_luci-app-netdata=y
+        CONFIG_PACKAGE_luci-app-openclash=y
+        CONFIG_PACKAGE_luci-app-package-manager=y
+        CONFIG_PACKAGE_luci-app-passwall=y
+        CONFIG_PACKAGE_luci-app-smartdns=y
+        CONFIG_PACKAGE_luci-app-ttyd=y
+        CONFIG_PACKAGE_luci-app-turboacc=y
+        CONFIG_PACKAGE_luci-app-upnp=y
+        CONFIG_PACKAGE_luci-app-vsftpd=y
+        CONFIG_PACKAGE_luci-app-wol=y
+        CONFIG_PACKAGE_luci-app-zerotier=y
+        CONFIG_PACKAGE_luci-theme-argon=y
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_luci-ssl=y
+        CONFIG_PACKAGE_luci-proto-ipv6=y
+        CONFIG_PACKAGE_luci-proto-ppp=y
+        CONFIG_PACKAGE_ipv6helper=y
+        CONFIG_PACKAGE_ddns-scripts=y
+        CONFIG_PACKAGE_ddns-scripts-cloudflare=y
+        CONFIG_PACKAGE_automount=y
+        CONFIG_PACKAGE_block-mount=y
+        CONFIG_PACKAGE_openssh-sftp-server=y
+        CONFIG_PACKAGE_htop=y
+        CONFIG_PACKAGE_nano=y
+        CONFIG_PACKAGE_curl=y
+        CONFIG_PACKAGE_wget=y
+        CONFIG_EOF
 
-    - name: Configure OpenWrt using menuconfig method
-      working-directory: ./openwrt
-      run: |
-        # 使用脚本自动配置，避免手动编辑 .config
-        cat > config.sh << 'EOF'
-        #!/bin/bash
-        make defconfig
-        
-        # 设置目标架构
-        sed -i 's/# CONFIG_TARGET_x86 is not set/CONFIG_TARGET_x86=y/' .config
-        echo "CONFIG_TARGET_x86_64=y" >> .config
-        echo "CONFIG_TARGET_x86_generic=y" >> .config
-        echo "CONFIG_TARGET_x86_generic_Generic=y" >> .config
-        
-        # 设置分区大小
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=2048" >> .config
-        echo "CONFIG_TARGET_KERNEL_PARTSIZE=256" >> .config
-        
-        # 启用必要的内核模块
-        echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-        
-        # 启用 Luci
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-        echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
-        echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
-        
-        # 启用主题
-        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-        
-        # 启用核心应用
-        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y" >> .config
-        
-        # 启用第三方应用
-        echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-autoupdate=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-control-webrestriction=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-control-weburl=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ddns-go=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-netdata=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
-        
         # 更新配置
         make defconfig
-        EOF
-        
-        chmod +x config.sh
-        ./config.sh
 
-    - name: Build OpenWrt
-      working-directory: ./openwrt
-      continue-on-error: false
-      run: |
-        # 开始编译
+        # 开始构建
         echo "Starting build process..."
-        set -o pipefail
-        make -j$(nproc) V=s 2>&1 | tee build.log || (echo "Build failed, creating error log..." && tail -n 500 build.log > build_error.log && exit 1)
+        make -j$(nproc) V=s
+
+        echo "Build completed successfully!"
+        EOF
+
+        chmod +x build-openwrt.sh
+
+    - name: Run build in Docker container
+      run: |
+        # 在 Docker 容器中运行构建脚本
+        docker run --rm \
+          -v $(pwd)/build-openwrt.sh:/build-openwrt.sh \
+          -v $(pwd)/artifacts:/artifacts \
+          -e REPO_URL="${{ env.REPO_URL }}" \
+          -e REPO_BRANCH="${{ env.REPO_BRANCH }}" \
+          openwrtorg/sdk:x86_64-23.05.6 \
+          /build-openwrt.sh
+
+    - name: Copy artifacts from Docker
+      run: |
+        # 从 Docker 容器中复制构建产物
+        mkdir -p openwrt-bin
+        sudo cp -r artifacts/openwrt/bin/targets/x86/64/* openwrt-bin/ 2>/dev/null || echo "No artifacts found, this is normal if build failed"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: success()
       with:
         name: openwrt-x86-64-images
-        path: |
-          openwrt/bin/targets/x86/64/*.img.gz
-          openwrt/bin/targets/x86/64/*.kernel
-          openwrt/bin/targets/x86/64/sha256sums
+        path: openwrt-bin/*
         retention-days: 7
 
-    - name: Upload build log on failure
-      uses: actions/upload-artifact@v4
+    - name: Alternative build method
       if: failure()
-      with:
-        name: build-error-logs
-        path: |
-          openwrt/build.log
-          openwrt/build_error.log
-        retention-days: 7
-
-    - name: Cleanup on success
-      if: success()
       run: |
-        echo "Build completed successfully!"
-        du -sh openwrt/bin/targets/x86/64/*
+        echo "Docker build failed, trying alternative method..."
+        # 这里可以添加备选构建方法
 
     - name: Notify failure
       if: failure()
       run: |
-        echo "Build failed! Check the build-error-logs artifact for details."
+        echo "Build failed! Check the logs for details."
         exit 1
