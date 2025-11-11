@@ -1,4 +1,4 @@
-name: Build OpenWrt x86_64 with Disk Space Optimization
+name: Build OpenWrt x86_64 with Complete Plugin Set
 
 on:
   workflow_dispatch:
@@ -36,6 +36,15 @@ jobs:
         
     - name: Checkout repository
       uses: actions/checkout@v4
+      
+    - name: Cache OpenWrt downloads
+      uses: actions/cache@v3
+      with:
+        path: openwrt/dl
+        key: openwrt-dl-${{ hashFiles('**/.config') }}-${{ github.sha }}
+        restore-keys: |
+          openwrt-dl-${{ hashFiles('**/.config') }}-
+          openwrt-dl-
       
     - name: Install only essential dependencies
       run: |
@@ -79,12 +88,16 @@ jobs:
     - name: Clone OpenWrt source with shallow clone
       run: |
         echo "=== Cloning OpenWrt Source (Shallow) ==="
+        # 动态选择版本：优先使用手动输入的版本，否则使用环境变量默认值
+        OPENWRT_BRANCH="${{ github.event.inputs.version || env.OPENWRT_VERSION }}"
+        echo "Using OpenWrt version: $OPENWRT_BRANCH"
+        
         # 使用浅克隆减少磁盘使用
-        git clone --depth 1 --branch ${{ env.OPENWRT_VERSION }} \
+        git clone --depth 1 --branch "$OPENWRT_BRANCH" \
           https://git.openwrt.org/openwrt/openwrt.git openwrt
         cd openwrt
         echo "OpenWrt version:"
-        git describe --tags || echo "Shallow clone, using branch ${{ env.OPENWRT_VERSION }}"
+        git describe --tags || echo "Shallow clone, using branch $OPENWRT_BRANCH"
         
     - name: Clean up space before build
       run: |
@@ -105,12 +118,12 @@ jobs:
         echo "Space after cleanup:"
         df -h
         
-    - name: Configure minimal OpenWrt build
+    - name: Configure OpenWrt with Complete Plugin Set
       run: |
         cd openwrt
-        echo "=== Configuring Minimal Build ==="
+        echo "=== Configuring OpenWrt with Complete Plugin Set ==="
         
-        # 更新基础feeds（不使用第三方feeds以减少空间）
+        # 更新基础feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
@@ -122,48 +135,106 @@ jobs:
         echo "CONFIG_TARGET_x86_64=y" >> .config
         echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
         
-        # 使用较小的分区大小
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=512" >> .config
-        echo "CONFIG_TARGET_KERNEL_PARTSIZE=128" >> .config
+        # 使用稍大的分区大小以容纳更多插件
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
+        echo "CONFIG_TARGET_KERNEL_PARTSIZE=256" >> .config
         
-        # 只启用最必要的内核模块
+        # 启用必要的内核模块
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
         
-        # 只选择核心插件（减少数量）
+        # ===== 添加所有请求的 LuCI 插件 =====
+        
+        # DNS/广告过滤类
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+        
+        # 系统升级类
+        echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-autoupdate=y" >> .config
+        
+        # 网络控制类
+        echo "CONFIG_PACKAGE_luci-app-control-webrestriction=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-control-weburl=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        
+        # DDNS 类
+        echo "CONFIG_PACKAGE_luci-app-ddns-go=y" >> .config
+        
+        # 代理/VPN 类
+        echo "CONFIG_PACKAGE_luci-app-lucky=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
+        
+        # 监控/统计类
+        echo "CONFIG_PACKAGE_luci-app-netdata=y" >> .config
+        
+        # 系统工具类
+        echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
+        
+        # 文件服务类
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        
+        # 主题
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         
         # 启用LuCI核心
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
         
+        # ===== 添加中文语言支持 =====
+        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-attendedsysupgrade-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        
+        # 设置中文为默认语言
+        echo "CONFIG_LUCI_LANG_zh-cn=y" >> .config
+        
+        # ===== 添加必要的依赖包 =====
+        echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+        echo "CONFIG_PACKAGE_smartdns=y" >> .config
+        echo "CONFIG_PACKAGE_ddns-go=y" >> .config
+        echo "CONFIG_PACKAGE_lucky=y" >> .config
+        echo "CONFIG_PACKAGE_openclash=y" >> .config
+        echo "CONFIG_PACKAGE_zerotier=y" >> .config
+        echo "CONFIG_PACKAGE_netdata=y" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_ttyd=y" >> .config
+        
         # 禁用调试信息以节省空间
         echo "CONFIG_DEBUG_INFO=n" >> .config
-        echo "CONFIG_DEBUG=y" >> .config
+        echo "# CONFIG_DEBUG is not set" >> .config
         
         # 检查配置
         make defconfig
         
-        echo "=== Minimal Configuration Complete ==="
+        echo "=== Complete Plugin Configuration Complete ==="
         echo "Selected packages:"
-        grep "^CONFIG_PACKAGE" .config | head -20
+        grep "^CONFIG_PACKAGE" .config | head -30
+        echo "Chinese language packages:"
+        grep "zh-cn" .config
         
     - name: Download packages with cleanup
       run: |
         cd openwrt
         echo "=== Downloading Packages ==="
         
-        # 只下载必要的包
-        make -j2 download
+        # 动态设置并行下载数量
+        echo "CPU cores: $(nproc)"
+        make -j$(nproc) download
         
         echo "=== Package Download Complete ==="
         echo "Download cache size:"
@@ -177,7 +248,7 @@ jobs:
         # 监控磁盘空间
         df -h
         
-        # 创建构建脚本，包含空间监控
+        # 创建构建脚本，包含空间监控和增强的错误处理
         cat > build_with_monitor.sh << 'EOF'
         #!/bin/bash
         set -e
@@ -191,43 +262,64 @@ jobs:
             done
         }
         
-        # 启动监控后台进程
-        monitor_space &
-        MONITOR_PID=$!
-        
-        # 构建函数
+        # 构建函数，包含错误检查
         build_openwrt() {
             echo "=== Building Toolchain ==="
-            make -j2 tools/install
+            make -j$(nproc) tools/install
+            if [ $? -ne 0 ]; then
+                echo "❌ Toolchain build failed"
+                return 1
+            fi
             
             echo "=== Building Target ==="
-            # 使用更少的并行进程和减少日志输出
-            make -j2 2>&1 | grep -E "error|warning|Building|Installing" || true
+            # 使用动态并行进程和减少日志输出
+            if make -j$(nproc) 2>&1 | grep -E "error:|warning:|Building|Installing"; then
+                echo "✅ Make command completed"
+            else
+                echo "⚠️ Make command completed with warnings or no matching output"
+            fi
             
             # 检查构建结果
-            if [ -f "bin/targets/x86/64/openwrt-x86-64-generic-kernel.bin" ]; then
+            if [ -f "bin/targets/x86/64/openwrt-x86-64-generic-kernel.bin" ] || \
+               [ -f "bin/targets/x86/64/openwrt-x86-64-generic-ext4-combined.img.gz" ] || \
+               [ -f "bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined.img.gz" ]; then
                 echo "✅ Build successful!"
                 return 0
             else
-                echo "❌ Build failed!"
+                echo "❌ Build failed - no target binaries found!"
+                # 列出bin目录内容以便调试
+                echo "Contents of bin/targets:"
+                find bin/targets -type f 2>/dev/null | head -20 || echo "No bin/targets directory"
                 return 1
             fi
         }
         
+        # 启动监控后台进程
+        monitor_space &
+        MONITOR_PID=$!
+        
+        # 设置trap确保监控进程在脚本退出时被终止
+        trap "echo 'Cleaning up monitor process'; kill $MONITOR_PID 2>/dev/null || true; exit" EXIT INT TERM
+        
         # 执行构建
         if build_openwrt; then
-            # 停止监控
-            kill $MONITOR_PID 2>/dev/null || true
             echo "=== Build Completed Successfully ==="
+            
+            # 显示最终镜像信息
+            echo "=== Generated Images ==="
+            find bin/targets -name "*.img" -o -name "*.bin" -o -name "*.gz" 2>/dev/null | head -10
+            
             exit 0
         else
-            # 停止监控
-            kill $MONITOR_PID 2>/dev/null || true
             echo "=== Build Failed ==="
             
             # 保存错误信息
             echo "=== Last 50 lines of build log ==="
-            tail -50 build.log 2>/dev/null || echo "No build log found"
+            if [ -f "build.log" ]; then
+                tail -50 build.log
+            else
+                echo "No build log found, checking recent make output..."
+            fi
             
             # 检查磁盘空间状态
             echo "=== Final Disk Space ==="
@@ -238,7 +330,8 @@ jobs:
         EOF
         
         chmod +x build_with_monitor.sh
-        ./build_with_monitor.sh
+        # 执行构建脚本并记录输出
+        ./build_with_monitor.sh 2>&1 | tee build_output.log
         
     - name: Clean up build artifacts to save space
       if: always()
@@ -266,7 +359,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-${{ env.OPENWRT_VERSION }}-x86_64-minimal
+        name: openwrt-${{ github.event.inputs.version || env.OPENWRT_VERSION }}-x86_64-complete
         path: |
           openwrt/bin/targets/x86/64/*.gz
           openwrt/bin/targets/x86/64/*.bin
@@ -274,13 +367,14 @@ jobs:
         retention-days: 7
         compression-level: 9
 
-    - name: Upload minimal logs on failure
+    - name: Upload build logs on failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: build-failure-minimal
+        name: build-failure-logs
         path: |
           openwrt/.config
+          openwrt/build_output.log
         retention-days: 7
 
     - name: Final disk space report
@@ -292,7 +386,10 @@ jobs:
         echo "Status: ${{ job.status }}"
         if [ -d "openwrt/bin/targets" ]; then
             echo "✅ Build artifacts generated"
-            ls -la openwrt/bin/targets/x86/64/ 2>/dev/null | head -10 || echo "No binaries found"
+            echo "Artifacts:"
+            ls -la openwrt/bin/targets/x86/64/ 2>/dev/null | head -10 || echo "No binaries found in expected location"
         else
             echo "❌ No build artifacts"
         fi
+        echo "OpenWrt Version: ${{ github.event.inputs.version || env.OPENWRT_VERSION }}"
+        echo "Features: Complete plugin set with Chinese language support"
